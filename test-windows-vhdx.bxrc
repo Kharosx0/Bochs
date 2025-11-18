@@ -1,0 +1,32 @@
+# Windows Gen2 VHDX UEFI Boot Configuration
+# This configuration uses native VHDX support to boot Windows Gen2 UEFI
+
+memory: guest=4096, host=4096
+romimage: file=bochs/bios/OVMF_CODE_SERIAL.fd
+vgaromimage: file=bochs/bios/VGABIOS-lgpl-latest-cirrus.bin
+cpu: count=2, ips=50000000, reset_on_triple_fault=1, model=corei7_sandy_bridge_2600k
+pci: enabled=1, chipset=i440fx
+display_library: x
+vga: extension=cirrus
+
+# Logging for debugging
+log: bochs-windows-vhdx.log
+debugger_log: -
+debug: action=ignore
+info: action=report
+error: action=report
+panic: action=fatal
+
+# Serial console - Windows may output EFI boot messages
+com1: enabled=1, mode=file, dev=windows-vhdx-serial.log
+
+# Windows VHDX disk - now with native VHDX support!
+# Change the path to your Windows Gen2 VHDX file
+ata0: enabled=1, ioaddr1=0x1f0, ioaddr2=0x3f0, irq=14
+ata0-master: type=disk, path=windows.vhdx, mode=vhdx
+
+# Boot from disk
+boot: disk
+
+mouse: enabled=1
+keyboard: type=mf, serial_delay=250
