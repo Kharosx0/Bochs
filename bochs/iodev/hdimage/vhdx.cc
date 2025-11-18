@@ -212,7 +212,8 @@ int vhdx_image_t::parse_region_table()
   Bit32u checksum, entry_count;
   const Bit8u bat_guid[] = VHDX_REGION_BAT_GUID;
   const Bit8u metadata_guid[] = VHDX_REGION_METADATA_GUID;
-  Bit64u metadata_offset = 0, metadata_length = 0;
+  metadata_offset = 0;
+  metadata_length = 0;
 
   // Read region table
   if (bx_read_image(fd, VHDX_REGION_TABLE_OFFSET, (char*)region_buf, VHDX_REGION_TABLE_SIZE) != VHDX_REGION_TABLE_SIZE) {
@@ -223,7 +224,7 @@ int vhdx_image_t::parse_region_table()
   region_header = (vhdx_region_table_header_t*)region_buf;
 
   if (le32_to_cpu(region_header->signature) != VHDX_REGION_SIGNATURE) {
-    BX_ERROR(("VHDX: invalid region table signature"));
+    BX_ERROR(("VHDX: invalid region table signature: 0x%08x", le32_to_cpu(region_header->signature)));
     return -1;
   }
 
@@ -231,11 +232,13 @@ int vhdx_image_t::parse_region_table()
   checksum = le32_to_cpu(region_header->checksum);
   region_header->checksum = 0;
   if (validate_checksum(region_buf, VHDX_REGION_TABLE_SIZE, checksum) != 0) {
+    BX_ERROR(("VHDX: region table checksum failed"));
     return -1;
   }
   region_header->checksum = cpu_to_le32(checksum);
 
   entry_count = le32_to_cpu(region_header->entry_count);
+  BX_DEBUG(("VHDX: region entry_count=%u", entry_count));
   if (entry_count > 2047) {
     BX_ERROR(("VHDX: invalid region entry count: %u", entry_count));
     return -1;
@@ -245,6 +248,14 @@ int vhdx_image_t::parse_region_table()
   entries = (vhdx_region_table_entry_t*)(region_buf + sizeof(vhdx_region_table_header_t));
 
   for (Bit32u i = 0; i < entry_count; i++) {
+    BX_DEBUG(("VHDX: Entry %u GUID: %02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+           i,
+           entries[i].guid[3], entries[i].guid[2], entries[i].guid[1], entries[i].guid[0],
+           entries[i].guid[5], entries[i].guid[4],
+           entries[i].guid[7], entries[i].guid[6],
+           entries[i].guid[8], entries[i].guid[9],
+           entries[i].guid[10], entries[i].guid[11], entries[i].guid[12], entries[i].guid[13], entries[i].guid[14], entries[i].guid[15]));
+
     if (guid_eq(entries[i].guid, bat_guid)) {
       bat_offset = le64_to_cpu(entries[i].file_offset);
       Bit32u bat_length = le32_to_cpu(entries[i].length);
@@ -260,7 +271,7 @@ int vhdx_image_t::parse_region_table()
   }
 
   if (bat_offset == 0 || metadata_offset == 0) {
-    BX_ERROR(("VHDX: BAT or metadata region not found"));
+    BX_ERROR(("VHDX: BAT or metadata region not found. bat_offset=%llu, metadata_offset=%llu", (unsigned long long)bat_offset, (unsigned long long)metadata_offset));
     return -1;
   }
 
@@ -288,7 +299,7 @@ int vhdx_image_t::parse_region_table()
 
 int vhdx_image_t::parse_metadata()
 {
-  Bit8u metadata_buf[64 * 1024];  // Max metadata region size
+  Bit8u *metadata_buf;
   vhdx_metadata_table_header_t *meta_header;
   vhdx_metadata_table_entry_t *meta_entries;
   Bit16u entry_count;
@@ -297,41 +308,36 @@ int vhdx_image_t::parse_metadata()
   const Bit8u log_sect_size_guid[] = VHDX_METADATA_LOGICAL_SECTOR_SIZE_GUID;
   const Bit8u phys_sect_size_guid[] = VHDX_METADATA_PHYSICAL_SECTOR_SIZE_GUID;
 
+  if (metadata_length == 0) {
+     BX_ERROR(("VHDX: metadata length is 0"));
+     return -1;
+  }
+
+  metadata_buf = new Bit8u[metadata_length];
+
   // Read metadata region header
-  if (bx_read_image(fd, bat_offset - (64 * 1024), (char*)metadata_buf, 64 * 1024) != 64 * 1024) {
-    // Try finding metadata after BAT
-    Bit64u metadata_try = bat_offset + (bat_entry_count * sizeof(Bit64u));
-    if (bx_read_image(fd, metadata_try, (char*)metadata_buf, 64 * 1024) != 64 * 1024) {
-      BX_ERROR(("VHDX: cannot read metadata region"));
-      return -1;
-    }
+  if (bx_read_image(fd, metadata_offset, (char*)metadata_buf, metadata_length) != (ssize_t)metadata_length) {
+    BX_ERROR(("VHDX: cannot read metadata region"));
+    delete[] metadata_buf;
+    return -1;
   }
 
   meta_header = (vhdx_metadata_table_header_t*)metadata_buf;
 
   // Check signature ("metadata")
   if (memcmp(&meta_header->signature, "metadata", 8) != 0) {
-    // Metadata might be at a different location, search in region table
-    BX_ERROR(("VHDX: invalid metadata signature, trying alternate location"));
-
-    // Re-read from region table specified offset
-    // For now, assume metadata is before BAT
-    Bit64u metadata_offset = bat_offset - (1024 * 1024);  // Try 1MB before BAT
-    if (bx_read_image(fd, metadata_offset, (char*)metadata_buf, 64 * 1024) != 64 * 1024) {
-      BX_ERROR(("VHDX: cannot read metadata from alternate location"));
-      return -1;
-    }
-
-    meta_header = (vhdx_metadata_table_header_t*)metadata_buf;
-    if (memcmp(&meta_header->signature, "metadata", 8) != 0) {
-      BX_ERROR(("VHDX: invalid metadata signature"));
-      return -1;
-    }
+    char sig[9];
+    memcpy(sig, &meta_header->signature, 8);
+    sig[8] = 0;
+    BX_ERROR(("VHDX: invalid metadata signature: '%s' (hex: %016llx)", sig, (unsigned long long)le64_to_cpu(meta_header->signature)));
+    delete[] metadata_buf;
+    return -1;
   }
 
   entry_count = le16_to_cpu(meta_header->entry_count);
   if (entry_count > 2047) {
     BX_ERROR(("VHDX: invalid metadata entry count: %u", entry_count));
+    delete[] metadata_buf;
     return -1;
   }
 
@@ -345,30 +351,53 @@ int vhdx_image_t::parse_metadata()
 
   for (Bit16u i = 0; i < entry_count; i++) {
     Bit32u offset = le32_to_cpu(meta_entries[i].offset);
+    
+    if (offset >= metadata_length) {
+        BX_ERROR(("VHDX: metadata item offset %u out of bounds (length %u)", offset, metadata_length));
+        continue;
+    }
 
     if (guid_eq(meta_entries[i].item_id, file_params_guid)) {
+      if (offset + sizeof(vhdx_file_parameters_t) > metadata_length) {
+        BX_ERROR(("VHDX: file params metadata item out of bounds"));
+        continue;
+      }
       vhdx_file_parameters_t *params = (vhdx_file_parameters_t*)(metadata_buf + offset);
       block_size = le32_to_cpu(params->block_size);
       found_block_size = true;
       BX_DEBUG(("VHDX: block_size = %u bytes", block_size));
     }
     else if (guid_eq(meta_entries[i].item_id, virt_size_guid)) {
+      if (offset + sizeof(Bit64u) > metadata_length) {
+        BX_ERROR(("VHDX: virtual size metadata item out of bounds"));
+        continue;
+      }
       virtual_disk_size = le64_to_cpu(*(Bit64u*)(metadata_buf + offset));
       found_virt_size = true;
       BX_DEBUG(("VHDX: virtual_disk_size = %llu bytes",
                 (unsigned long long)virtual_disk_size));
     }
     else if (guid_eq(meta_entries[i].item_id, log_sect_size_guid)) {
+      if (offset + sizeof(Bit32u) > metadata_length) {
+        BX_ERROR(("VHDX: logical sector size metadata item out of bounds"));
+        continue;
+      }
       logical_sector_size = le32_to_cpu(*(Bit32u*)(metadata_buf + offset));
       found_log_sect = true;
       BX_DEBUG(("VHDX: logical_sector_size = %u bytes", logical_sector_size));
     }
     else if (guid_eq(meta_entries[i].item_id, phys_sect_size_guid)) {
+      if (offset + sizeof(Bit32u) > metadata_length) {
+        BX_ERROR(("VHDX: physical sector size metadata item out of bounds"));
+        continue;
+      }
       physical_sector_size = le32_to_cpu(*(Bit32u*)(metadata_buf + offset));
       found_phys_sect = true;
       BX_DEBUG(("VHDX: physical_sector_size = %u bytes", physical_sector_size));
     }
   }
+  
+  delete[] metadata_buf;
 
   if (!found_block_size || !found_virt_size || !found_log_sect || !found_phys_sect) {
     BX_ERROR(("VHDX: missing required metadata"));
@@ -402,14 +431,6 @@ Bit64s vhdx_image_t::get_sector_offset(Bit64s sector_num)
 
   Bit64u bat_entry = bat[block_index];
   Bit64u state = bat_entry & VHDX_BAT_STATE_BIT_MASK;
-
-  // Check block state
-  if (state == VHDX_BAT_STATE_PAYLOAD_BLOCK_NOT_PRESENT ||
-      state == VHDX_BAT_STATE_PAYLOAD_BLOCK_ZERO ||
-      state == VHDX_BAT_STATE_PAYLOAD_BLOCK_UNMAPPED) {
-    return -1;  // Return -1 for zero/unallocated blocks
-  }
-
   if (state != VHDX_BAT_STATE_PAYLOAD_BLOCK_FULLY_PRESENT &&
       state != VHDX_BAT_STATE_PAYLOAD_BLOCK_PARTIALLY_PRESENT) {
     BX_ERROR(("VHDX: unsupported BAT entry state: %llu", (unsigned long long)state));
