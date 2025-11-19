@@ -243,6 +243,8 @@ void bx_devices_c::init(BX_MEM_C *newmem)
     if ((pci.advopts & BX_PCI_ADVOPT_NOHPET) == 0) {
       PLUG_load_plugin(hpet, PLUGTYPE_STANDARD);
     }
+    // fw_cfg device - required for UEFI/OVMF boot
+    PLUG_load_plugin(fwcfg, PLUGTYPE_STANDARD);
 #else
     BX_ERROR(("Bochs is not compiled with PCI support"));
 #endif
@@ -1807,3 +1809,4 @@ Bit32u bx_pci_device_c::pci_read_handler(Bit8u address, unsigned io_len)
   return value;
 }
 #endif
+

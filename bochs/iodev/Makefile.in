@@ -84,6 +84,7 @@ OBJS_THAT_CAN_BE_PLUGINS = \
   extfpuirq.o \
   speaker.o \
   ioapic.o \
+  fwcfg.o \
   @BUSM_OBJS@ \
   @PCI_OBJS@ \
   @GAME_OBJS@ \
@@ -519,3 +520,11 @@ virt_timer.lo: virt_timer.@CPP_SUFFIX@ ../bochs.h ../config.h ../osdep.h \
  ../gui/paramtree.h ../logio.h \
  ../misc/bswap.h ../gui/siminterface.h \
  ../param_names.h virt_timer.h ../pc_system.h
+
+fwcfg.o: fwcfg.@CPP_SUFFIX@ iodev.h ../bochs.h ../config.h ../osdep.h \
+ ../gui/paramtree.h ../logio.h \
+ ../misc/bswap.h ../plugin.h \
+ ../extplugin.h ../param_names.h ../pc_system.h ../bx_debug/debug.h \
+ ../config.h ../osdep.h ../memory/memory-bochs.h ../gui/siminterface.h \
+ ../gui/gui.h fwcfg.h
+
