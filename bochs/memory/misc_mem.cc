@@ -354,9 +354,19 @@ void BX_MEM_C::load_ROM(const char *path, bx_phy_address romaddress, Bit8u type)
   }
   if (type == 0) {
     if (romaddress > 0) {
-      if ((romaddress + size) != 0x100000 && (romaddress + size)) {
+      // Mask address to 32 bits (addresses above 4GB get sign-extended on 64-bit systems)
+      romaddress = romaddress & BX_CONST64(0xFFFFFFFF);
+      // Allow ROM to end at either 1MB (legacy BIOS) or within 4MB below 4GB (UEFI firmware)
+      bx_phy_address rom_end = romaddress + size;
+      // Legacy BIOS: must end at exactly 0x100000 (1MB)
+      // UEFI firmware: must be in range 0xFFC00000-0xFFFFFFFF (last 4MB below 4GB)
+      bool legacy_bios = (rom_end == 0x100000);
+      bool uefi_firmware = (romaddress >= 0xFFC00000 && rom_end <= BX_CONST64(0x100000000));
+      BX_INFO(("ROM validation: address=0x" FMT_PHY_ADDRX ", size=0x%lx, end=0x" FMT_PHY_ADDRX ", legacy=%d, uefi=%d",
+               romaddress, size, rom_end, legacy_bios, uefi_firmware));
+      if (!legacy_bios && !uefi_firmware && rom_end != 0) {
         close(fd);
-        BX_PANIC(("ROM: System BIOS must end at 0xfffff"));
+        BX_PANIC(("ROM: System BIOS must end at 0xfffff (legacy) or be in range 0xffc00000-0xffffffff (UEFI)"));
         return;
       }
     } else {

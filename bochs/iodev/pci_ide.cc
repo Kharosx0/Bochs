@@ -104,11 +104,12 @@ void bx_pci_ide_c::init(void)
 
   // initialize readonly registers
   if (BX_PIDE_THIS s.chipset == BX_PCI_CHIPSET_I430FX) {
-    init_pci_conf(0x8086, 0x1230, 0x00, 0x010180, 0x00, 0);
+    init_pci_conf(0x8086, 0x1230, 0x00, 0x010180, 0x00, BX_PCI_INTA);
   } else if (BX_PIDE_THIS s.chipset == BX_PCI_CHIPSET_I440BX) {
-    init_pci_conf(0x8086, 0x7111, 0x00, 0x010180, 0x00, 0);
+    init_pci_conf(0x8086, 0x7111, 0x00, 0x010180, 0x00, BX_PCI_INTA);
   } else {
-    init_pci_conf(0x8086, 0x7010, 0x00, 0x010180, 0x00, 0);
+    // PIIX3 IDE controller - must have interrupt pin for UEFI/OVMF detection
+    init_pci_conf(0x8086, 0x7010, 0x00, 0x010180, 0x00, BX_PCI_INTA);
   }
   BX_PIDE_THIS init_bar_io(4, 16, read_handler, write_handler, &bmdma_iomask[0]);
 
@@ -135,6 +136,41 @@ void bx_pci_ide_c::reset(unsigned type)
     BX_PIDE_THIS pci_conf[0x43] = 0x80;
   }
   BX_PIDE_THIS pci_conf[0x44] = 0x00;
+
+  // Set legacy IDE BARs for compatibility mode
+  // In compatibility mode (prog-if = 0x8A), BAR0-3 are hardwired and non-relocatable
+  // They should return 0x00000001 to indicate "I/O space, not relocatable"
+  // OVMF/BIOS will use the standard ISA addresses (0x1F0, 0x3F4, 0x170, 0x374)
+  BX_INFO(("PIIX3 PCI IDE: Initializing BARs for compatibility mode (hardwired)"));
+
+  // BAR0: Primary Command - hardwired (actual ports: 0x1F0-0x1F7)
+  BX_PIDE_THIS pci_conf[0x10] = 0x01;  // I/O space, hardwired
+  BX_PIDE_THIS pci_conf[0x11] = 0x00;
+  BX_PIDE_THIS pci_conf[0x12] = 0x00;
+  BX_PIDE_THIS pci_conf[0x13] = 0x00;
+  BX_INFO(("PIIX3 PCI IDE: BAR0 = 0x00000001 (hardwired, use ISA port 0x1F0)"));
+
+  // BAR1: Primary Control - hardwired (actual ports: 0x3F4-0x3F7)
+  BX_PIDE_THIS pci_conf[0x14] = 0x01;  // I/O space, hardwired
+  BX_PIDE_THIS pci_conf[0x15] = 0x00;
+  BX_PIDE_THIS pci_conf[0x16] = 0x00;
+  BX_PIDE_THIS pci_conf[0x17] = 0x00;
+  BX_INFO(("PIIX3 PCI IDE: BAR1 = 0x00000001 (hardwired, use ISA port 0x3F4)"));
+
+  // BAR2: Secondary Command - hardwired (actual ports: 0x170-0x177)
+  BX_PIDE_THIS pci_conf[0x18] = 0x01;  // I/O space, hardwired
+  BX_PIDE_THIS pci_conf[0x19] = 0x00;
+  BX_PIDE_THIS pci_conf[0x1A] = 0x00;
+  BX_PIDE_THIS pci_conf[0x1B] = 0x00;
+  BX_INFO(("PIIX3 PCI IDE: BAR2 = 0x00000001 (hardwired, use ISA port 0x170)"));
+
+  // BAR3: Secondary Control - hardwired (actual ports: 0x374-0x377)
+  BX_PIDE_THIS pci_conf[0x1C] = 0x01;  // I/O space, hardwired
+  BX_PIDE_THIS pci_conf[0x1D] = 0x00;
+  BX_PIDE_THIS pci_conf[0x1E] = 0x00;
+  BX_PIDE_THIS pci_conf[0x1F] = 0x00;
+  BX_INFO(("PIIX3 PCI IDE: BAR3 = 0x00000001 (hardwired, use ISA port 0x374)"));
+
   for (unsigned i=0; i<2; i++) {
     BX_PIDE_THIS s.bmdma[i].cmd_ssbm = 0;
     BX_PIDE_THIS s.bmdma[i].cmd_rwcon = 0;
@@ -432,24 +468,33 @@ void bx_pci_ide_c::write(Bit32u address, Bit32u value, unsigned io_len)
 // pci configuration space write callback handler
 void bx_pci_ide_c::pci_write_handler(Bit8u address, Bit32u value, unsigned io_len)
 {
-  if (((address >= 0x10) && (address < 0x20)) ||
-      ((address > 0x23) && (address < 0x40)))
+  // Block config registers 0x24-0x3F
+  if ((address > 0x23) && (address < 0x40))
     return;
 
   BX_DEBUG_PCI_WRITE(address, value, io_len);
   for (unsigned i=0; i<io_len; i++) {
 //  Bit8u oldval = BX_PIDE_THIS pci_conf[address+i];
     Bit8u value8 = (value >> (i*8)) & 0xFF;
-    switch (address+i) {
+    Bit8u addr = address + i;
+    switch (addr) {
       case 0x05:
       case 0x06:
         break;
       case 0x04:
-        BX_PIDE_THIS pci_conf[address+i] = value8 & 0x05;
+        BX_PIDE_THIS pci_conf[addr] = value8 & 0x05;
+        break;
+      // BAR0-BAR3 (0x10-0x1F): Read-only legacy IDE addresses
+      // In compatibility mode, these are hardwired and non-relocatable
+      case 0x10: case 0x11: case 0x12: case 0x13:  // BAR0
+      case 0x14: case 0x15: case 0x16: case 0x17:  // BAR1
+      case 0x18: case 0x19: case 0x1A: case 0x1B:  // BAR2
+      case 0x1C: case 0x1D: case 0x1E: case 0x1F:  // BAR3
+        // Silently ignore writes to maintain hardwired values
         break;
       default:
-        BX_PIDE_THIS pci_conf[address+i] = value8;
-        BX_DEBUG(("PIIX3 PCI IDE write register 0x%02x value 0x%02x", address+i,
+        BX_PIDE_THIS pci_conf[addr] = value8;
+        BX_DEBUG(("PIIX3 PCI IDE write register 0x%02x value 0x%02x", addr,
                   value8));
     }
   }

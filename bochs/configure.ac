@@ -1501,7 +1501,7 @@ AC_ARG_ENABLE(pci,
     ]
   )
 if test "$pci" = "1"; then
-  PCI_OBJS='pci.o pci2isa.o pci_ide.o acpi.o hpet.o'
+  PCI_OBJS='pci.o pci2isa.o pci_ide.o acpi.o hpet.o fwcfg.o'
 fi
 AC_SUBST(PCI_OBJS)
 

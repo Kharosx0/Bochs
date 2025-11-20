@@ -1761,6 +1761,10 @@ void bx_pci_device_c::pci_write_handler_common(Bit8u address, Bit32u value, unsi
           }
         }
       }
+    } else {
+      // BAR type is NONE - pass write to device-specific handler
+      // This allows devices to implement read-only or custom BAR behavior
+      pci_write_handler(address, value, io_len);
     }
   } else if (((address & 0xfc) == 0x30) && (pci_rom_size > 0)) {
     BX_DEBUG_PCI_WRITE(address, value, io_len);
