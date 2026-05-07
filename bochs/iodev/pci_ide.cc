@@ -287,6 +287,11 @@ void bx_pci_ide_c::timer()
       }
     };
     if (count > 0) {
+      Bit32u transfer_size = (Bit32u)(BX_PIDE_THIS s.bmdma[channel].buffer_top - BX_PIDE_THIS s.bmdma[channel].buffer_idx);
+      if (transfer_size > 0) {
+        DEV_MEM_WRITE_PHYSICAL_DMA(prd.addr, transfer_size, BX_PIDE_THIS s.bmdma[channel].buffer_idx);
+        BX_PIDE_THIS s.bmdma[channel].buffer_idx += transfer_size;
+      }
       DEV_hd_bmdma_complete(channel);
       return;
     } else {
